@@ -1,25 +1,22 @@
 import { FormEvent, useState } from 'react'
-import { supabase } from '../lib/supabaseClient'
-import ForgotPassword from './ForgotPassword'
+import { signIn } from '../lib/session'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [mode, setMode] = useState<'login' | 'forgot'>('login')
-
-  if (mode === 'forgot') {
-    return <ForgotPassword onBack={() => setMode('login')} />
-  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
     setSubmitting(true)
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setError(error.message)
+    try {
+      await signIn(email, password)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not sign in.')
+    }
 
     setSubmitting(false)
   }
@@ -62,17 +59,6 @@ export default function Login() {
           className="w-full rounded bg-emerald-600 px-3 py-2 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
         >
           {submitting ? 'Signing in…' : 'Sign in'}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setError(null)
-            setMode('forgot')
-          }}
-          className="w-full text-sm text-slate-400 hover:text-slate-200"
-        >
-          Forgot password?
         </button>
       </form>
     </div>

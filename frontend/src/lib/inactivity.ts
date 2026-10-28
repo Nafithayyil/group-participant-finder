@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient'
+import { signOut } from './session'
 
 const IDLE_LIMIT_MS = 24 * 60 * 60 * 1000 // 1 day
 const STORAGE_KEY = 'gpv_last_activity'
@@ -18,7 +18,7 @@ function markActivity() {
   }
 }
 
-async function checkIdle() {
+function checkIdle() {
   let lastActivity: number
   try {
     lastActivity = Number(localStorage.getItem(STORAGE_KEY)) || Date.now()
@@ -27,7 +27,7 @@ async function checkIdle() {
   }
 
   if (Date.now() - lastActivity > IDLE_LIMIT_MS) {
-    await supabase.auth.signOut()
+    signOut()
   }
 }
 

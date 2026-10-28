@@ -1,96 +1,79 @@
 import { Router } from 'express'
+import rateLimit from 'express-rate-limit'
 import { createClient } from '@supabase/supabase-js'
-import { supabase } from '../supabase'
 
 export const publicRouter = Router()
 
-// A client kept separate from the shared service-role `supabase` client used for
-// DB access. verifyOtp() sets an in-memory user session on whichever client runs
-// it, and if that happened on the shared client its PostgREST calls would start
-// using the recovery user's token instead of the service role, so every
-// RLS-protected query would break until a restart. Admin calls (listUsers /
-// updateUserById) are session-independent and stay on the shared client.
-const authClient = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
-  auth: { persistSession: false, autoRefreshToken: false },
+// Login goes through the backend so the browser never needs the Supabase URL or
+// key. A fresh client is used per call: signing in sets an in-memory user
+// session on whichever client runs it, which must never leak between requests.
+function authClient() {
+  return createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+}
+
+// Slows down password guessing: 10 attempts per 15 minutes per IP.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Try again in a few minutes.' },
 })
 
-async function findUserByEmail(email: string) {
-  const target = email.trim().toLowerCase()
-  const perPage = 1000
-  let page = 1
-  for (;;) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage })
-    if (error) throw new Error(error.message)
-    const match = data.users.find((u) => u.email?.toLowerCase() === target)
-    if (match) return match
-    if (data.users.length < perPage) return null
-    page++
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Try again in a few minutes.' },
+})
+
+interface SessionPayload {
+  access_token: string
+  refresh_token: string
+  expires_at: number
+}
+
+function toPayload(session: {
+  access_token: string
+  refresh_token: string
+  expires_at?: number
+}): SessionPayload {
+  return {
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    expires_at: session.expires_at ?? Math.floor(Date.now() / 1000) + 3600,
   }
 }
 
-// Step 1: only email a recovery code if the account actually exists, so the UI
-// can show "no account found" instead of silently doing nothing (Supabase's own
-// reset call never reveals whether the email matched).
-publicRouter.post('/forgot-password/request', async (req, res) => {
-  const { email } = req.body as { email?: string }
-  if (!email?.trim()) {
-    res.status(400).json({ error: 'email is required' })
+publicRouter.post('/login', loginLimiter, async (req, res) => {
+  const { email, password } = req.body as { email?: string; password?: string }
+  if (!email?.trim() || !password) {
+    res.status(400).json({ error: 'email and password are required' })
     return
   }
 
-  try {
-    const user = await findUserByEmail(email)
-    if (!user) {
-      res.json({ exists: false })
-      return
-    }
-
-    const { error } = await authClient.auth.resetPasswordForEmail(email.trim())
-    if (error) {
-      res.status(500).json({ error: error.message })
-      return
-    }
-
-    res.json({ exists: true })
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+  const { data, error } = await authClient().auth.signInWithPassword({ email: email.trim(), password })
+  if (error || !data.session) {
+    res.status(401).json({ error: 'Invalid email or password' })
+    return
   }
+  res.json(toPayload(data.session))
 })
 
-// Step 2: verify the emailed 6-digit code and set the new password. Both run on
-// the server so the browser never holds a recovery session — the user just signs
-// in normally with the new password afterwards.
-publicRouter.post('/forgot-password/confirm', async (req, res) => {
-  const { email, code, password } = req.body as { email?: string; code?: string; password?: string }
-
-  if (!email?.trim() || !code?.trim() || !password) {
-    res.status(400).json({ error: 'email, code and password are required' })
-    return
-  }
-  if (password.length < 6) {
-    res.status(400).json({ error: 'Password must be at least 6 characters' })
+publicRouter.post('/refresh', refreshLimiter, async (req, res) => {
+  const { refresh_token } = req.body as { refresh_token?: string }
+  if (!refresh_token) {
+    res.status(400).json({ error: 'refresh_token is required' })
     return
   }
 
-  try {
-    const { data, error } = await authClient.auth.verifyOtp({
-      email: email.trim(),
-      token: code.trim(),
-      type: 'recovery',
-    })
-    if (error || !data.user) {
-      res.status(400).json({ error: 'Invalid or expired code' })
-      return
-    }
-
-    const { error: updateError } = await supabase.auth.admin.updateUserById(data.user.id, { password })
-    if (updateError) {
-      res.status(400).json({ error: updateError.message })
-      return
-    }
-
-    res.json({ ok: true })
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+  const { data, error } = await authClient().auth.refreshSession({ refresh_token })
+  if (error || !data.session) {
+    res.status(401).json({ error: 'Session expired' })
+    return
   }
+  res.json(toPayload(data.session))
 })

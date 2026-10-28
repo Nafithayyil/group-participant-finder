@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
 import path from 'path'
 import { createServer } from 'http'
 import { router } from './api/routes'
@@ -10,10 +11,13 @@ import { initSocket } from './socket'
 import { autoResumeSessions } from './whatsapp/client'
 
 const app = express()
+// Behind Render's proxy: lets rate limiting see each visitor's real IP.
+app.set('trust proxy', 1)
+app.use(helmet({ contentSecurityPolicy: false }))
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN ?? '*' }))
 app.use(express.json())
 
-// Public endpoints (forgot-password) must be reachable without a session, so
+// Public endpoints (login / refresh) must be reachable without a session, so
 // they are mounted before the auth-protected router.
 app.use('/api/public', publicRouter)
 app.use('/api', requireAuth, router)
