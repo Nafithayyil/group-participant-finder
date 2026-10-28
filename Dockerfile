@@ -15,6 +15,8 @@ RUN npm run build
 
 FROM node:20-alpine AS backend-build
 WORKDIR /app/backend
+# Baileys pulls libsignal from a git URL, so npm needs git in the image.
+RUN apk add --no-cache git
 COPY backend/package*.json ./
 RUN npm install
 COPY backend/ ./
@@ -22,6 +24,7 @@ RUN npm run build
 
 FROM node:20-alpine
 WORKDIR /app
+RUN apk add --no-cache git
 COPY --from=backend-build /app/backend/package*.json ./
 RUN npm install --omit=dev
 COPY --from=backend-build /app/backend/dist ./dist
