@@ -1,0 +1,11 @@
+node_modules/
+dist/
+frontend/dist/
+.env
+.env.local
+backend/.env
+frontend/.env
+*.log
+.DS_Store
+.claude/
+*.tsbuildinfo
